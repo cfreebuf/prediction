@@ -57,7 +57,7 @@ DEFINE_string(mtcnn_model, "./data/models/mtcnn/mtcnn_frozen_model.pb", "mtcnn m
 // Logo Model
 DEFINE_string(logo_model, "./data/models/logo/logo_frozen_model.pb", "logo model");
 
-DEFINE_string(result_http_server, "http://125.88.192.170:8086/", "http server to get images after processed");
+DEFINE_string(result_http_server, "http://localhost:8086/", "http server to get images after processed");
 
 DEFINE_string(face_detection_req_path, "./data/face_detection/request/", "request path to store images");
 DEFINE_string(face_detection_res_path, "./data/face_detection/response/", "response path to store images");
