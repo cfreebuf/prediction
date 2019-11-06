@@ -1,0 +1,13 @@
+hash_base = 10000;
+domains = (
+    {
+        bucket_flow = 10000;
+        name = "channel_domain";
+        layers = [
+            "channel"
+        ];
+        conditions = {
+            abtest_id = "2002";
+        };
+    }
+);

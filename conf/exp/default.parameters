@@ -1,0 +1,10 @@
+default = {
+    name = "predict_default";
+    renderer = "default_renderer";
+    chain = "predict";
+    prediction_id = "channel";
+    default_prediction_id = "channel";
+    abtest_id = "101";
+    pageid = 1;
+    uid = "lidongming";
+};

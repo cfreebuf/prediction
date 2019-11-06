@@ -1,0 +1,19 @@
+diversion_type = "UID";
+hash_base = 10000;
+
+exp_list = (
+    {
+        name = "channel_lr_exp";
+        owner = "lidongming";
+        description = "channel lr exp";
+        bucket_flow = 10000;
+        bound_layers = "";
+        conditions = {
+            pageid = "\d+";
+        };
+        params = {
+          predict_type = "predict_lr";
+          prediction_id = "channel";
+        };
+    }
+);

@@ -1,0 +1,439 @@
+// CopyRight 2019 360. All rights reserved.
+// File   face_detection_module.cpp
+// Date   2019-11-04 15:33:38
+// Brief
+
+#include "tensorflow_serving/apis/prediction_service.grpc.pb.h"
+#include "grpc++/security/credentials.h"
+#include "google/protobuf/map.h"
+#include "google/protobuf/wrappers.pb.h"
+
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/example/example.pb.h"
+#include "tensorflow/core/example/feature.pb.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/util/command_line_flags.h"
+
+#include <grpc/grpc.h>
+#include <grpcpp/channel.h>
+#include <grpcpp/client_context.h>
+#include <grpcpp/create_channel.h>
+#include <grpcpp/security/credentials.h>
+
+#include "prediction/module/face_detection_module.h"
+#include "prediction/server/tensorflow_serving_client.h"
+
+#include <iostream>
+
+namespace prediction {
+
+typedef char byte;
+
+using grpc::Channel;
+using grpc::ClientContext;
+using grpc::Status;
+
+using tensorflow::serving::PredictRequest;
+using tensorflow::serving::PredictResponse;
+using tensorflow::serving::PredictionService;
+using tensorflow::Example;
+using google::protobuf::Map;
+
+using TensorMap = Map<tensorflow::string, tensorflow::TensorProto>;
+
+const int NMS_UNION = 1;
+const int NMS_MIN = 2;
+const float kPNetThreshold = 0.6;
+const float kRNetThreshold = 0.7;
+const float kOnetThreshold = 0.9;
+
+int FaceDetectionModule::PNet(const cv::Mat& img, const ScaleWindow& win,
+                              std::vector<FaceBox>* boxes) {
+  LOG(INFO) << "Start PNet";
+  std::cout << "Start PNet" << std::endl;
+  PredictRequest request;
+  ConfigModel(&request);
+
+  std::cout << "Start mat to bytes" << std::endl;
+  int size = img.total() * img.elemSize();
+  // byte bytes[size];  // you will have to delete[] that later
+  byte* bytes = new byte[size];
+  std::memcpy(bytes, img.data, size * sizeof(byte));
+  std::cout << "Finish mat to bytes" << std::endl;
+
+  const std::string pnet_input = "images";
+  const std::string pnet_output_bias = "result1";
+  const std::string pnet_output_prob = "result2";
+
+  LOG(INFO) << "Start tensor proto";
+  std::cout << "Start tensor proto" << std::endl;
+  TensorMap& inputs = *request.mutable_inputs();
+  tensorflow::TensorProto& tensor_proto = inputs[pnet_input];
+  tensor_proto.set_dtype(tensorflow::DataType::DT_STRING);
+  LOG(INFO) << "Start set tensor content";
+  std::cout << "Start set tensor content" << std::endl;
+  // for (int i = 0; i < size; i++) {
+    // tensor_proto.add_string_val(bytes[i]);
+  // }
+  tensor_proto.add_string_val(bytes, size * sizeof(byte));
+  std::cout << "Start set dim" << std::endl;
+  LOG(INFO) << "Start set dim";
+  tensor_proto.mutable_tensor_shape()->add_dim()->set_size(size * sizeof(byte));
+
+#if 0
+  const std::string pnet_input = "pnet_inputs";
+  const std::string pnet_output_bias = "pnet/conv4-2/BiasAdd:0";
+  const std::string pnet_output_prob = "pnet/prob1:0";
+
+	cv::Mat resized_img;
+	int height = win.height;
+	int width = win.width;
+	float scale = win.scale;
+
+  LOG(INFO) << "h:" << height << " w:" << width << " s:" << scale;
+
+	cv::resize(img, resized_img, cv::Size(width, height), 0, 0);
+
+  int img_size = height * width * 3;
+  float input_data[img_size];
+  cv::Mat fake_mat(height, width, CV_32FC3, &input_data);
+  LOG(INFO) << "Start convert";
+  resized_img.convertTo(fake_mat, CV_32FC3);
+
+  LOG(INFO) << "Start tensor proto";
+  TensorMap& inputs = *request.mutable_inputs();
+  tensorflow::TensorProto& tensor_proto = inputs[pnet_input];
+  tensor_proto.set_dtype(tensorflow::DataType::DT_FLOAT);
+  LOG(INFO) << "Start set tensor content";
+  // tensor_proto.set_tensor_content(&input_data, img_size);
+  for (int i = 0; i < img_size; i++) {
+    tensor_proto.add_float_val(input_data[i]);
+  }
+  LOG(INFO) << "Start set dim";
+  tensor_proto.mutable_tensor_shape()->add_dim()->set_size(img_size);
+#endif
+
+  LOG(INFO) << "Start predict";
+  PredictResponse response;
+  // int predict_status = TensorflowServingClient::Predict(request, response);
+  // Create grpc channel
+  std::shared_ptr<Channel> channel = grpc::CreateChannel("localhost:8500",
+      grpc::InsecureChannelCredentials());
+  std::unique_ptr<tensorflow::serving::PredictionService::Stub> stub
+    = PredictionService::NewStub(channel);
+  // Timeout for grpc service 'Predict'
+  ClientContext context;
+  // std::chrono::system_clock::time_point deadline = 
+  // std::chrono::system_clock::now() 
+  // + std::chrono::milliseconds(FLAGS_client_connection_timeout);
+  // context.set_deadline(deadline);
+
+  LOG(INFO) << "Start Predict from grpc";
+  grpc::Status status = stub->Predict(&context, request, &response);
+
+  if (channel == nullptr) {
+    LOG(WARNING) << "TensorflowServingClient open failed, create channel error";
+    return -1;
+  }
+  int predict_status = 0;
+  if (status.ok()) {
+    predict_status = 0;
+  } else {
+    predict_status = -1;
+    // LOG(WARNING) << "Predict status:" << status.ToString();
+    LOG(ERROR) << "Predict error, code:" << status.error_code() << " msg:"
+               << status.error_message();
+  }
+  LOG(INFO) << "Predict status:" << predict_status;
+
+  if (predict_status == 0) {
+    TensorMap& outputs = *response.mutable_outputs();
+    tensorflow::TensorProto& bias_proto = outputs[pnet_output_bias];
+    tensorflow::TensorProto& prob_proto = outputs[pnet_output_prob];
+    LOG(INFO) << "PNet bias value size:" << bias_proto.float_val_size();
+    for (size_t i = 0; i < bias_proto.float_val_size(); i++) {
+      LOG(INFO) << "PNet bias value " << i << ":" << bias_proto.float_val(i);
+    }
+    LOG(INFO) << "PNet prob value size:" << prob_proto.float_val_size();
+    for (size_t i = 0; i < prob_proto.float_val_size(); i++) {
+      LOG(INFO) << "PNet prob value " << i << ":" << prob_proto.float_val(i);
+    }
+  } else {
+    // LOG(WARNING) << "PNet failed, rid:" << rid;
+    LOG(WARNING) << "PNet failed";
+  }
+}
+
+// Config model
+int FaceDetectionModule::ConfigModel(PredictRequest* request) {
+  const std::string model_name = "mtcnn";
+  // const std::string signature = "mtcnn_signature";
+  const std::string signature = "pnet_predict";
+  // int model_version = 2;
+  auto* model_spec = request->mutable_model_spec();
+  model_spec->set_name(model_name);
+  model_spec->set_signature_name(signature);
+  // if (model_version > 0) {
+    // model_spec->mutable_version()->set_value(model_version);
+  // }
+  return 0;
+}
+
+void FaceDetectionModule::Detect(cv::Mat& src, std::vector<FaceBox>* face_boxes) {
+  LOG(INFO) << "Start Detect";
+  std::cout << "Start Detect" << std::endl;
+  const float kAlpha = 0.0078125;
+  const float kMean = 127.5;
+  const int kMinSize = 40;
+  const float kFactor = 0.709;
+
+	cv::Mat img;
+	src.convertTo(img, CV_32FC3);
+	img = (img - kMean) * kAlpha;
+	img = img.t();
+	cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+
+	int img_h = img.rows;
+	int img_w = img.cols;
+	std::vector<ScaleWindow> scale_windows;
+	PyramidScales(img_h, img_w, kMinSize, kFactor, &scale_windows);
+
+	std::vector<FaceBox> pnet_boxes;
+	std::vector<FaceBox> pnet_boxes_final;
+  for (const ScaleWindow& scale_window : scale_windows) {
+		std::vector<FaceBox> boxes;
+		if (PNet(img, scale_window, &boxes) != 0) {
+      continue;
+    }
+		pnet_boxes.insert(pnet_boxes.end(), boxes.begin(), boxes.end());
+	}
+	ProcessBoxes(pnet_boxes, img_h, img_w, &pnet_boxes_final);
+
+  // FIXME:should modify!!!!!!
+#if 0
+	std::vector<FaceBox> rnet_boxes;
+	std::vector<FaceBox> rnet_boxes_final;
+	if (RNet(img, pnet_boxes_final, &rnet_boxes) != 0) {
+    return;
+  }
+	ProcessBoxes(rnet_boxes, img_h, img_w, &rnet_boxes_final);
+
+  float h = 0.0f;
+  float w = 0.0f;
+	std::vector<FaceBox> onet_boxes;
+	if (ONet(img, rnet_boxes_final, &onet_boxes) != 0) {
+    return;
+  }
+
+  for (FaceBox& box : onet_boxes) {
+		h = box.x1 - box.x0 + 1;
+		w = box.y1 - box.y0 + 1;
+		for (int j = 0; j < 5; j++) {
+			box.landmark.x[j] = box.x0 + w * box.landmark.x[j] - 1;
+			box.landmark.y[j] = box.y0 + h * box.landmark.y[j] - 1;
+		}
+	}
+
+	Regress(&onet_boxes);
+	Normalize(onet_boxes, 0.7, NMS_MIN, face_boxes);
+
+  for (FaceBox& box : *face_boxes) {
+		std::swap(box.x0, box.y0);
+		std::swap(box.x1 ,box.y1);
+
+		for(int l = 0; l < 5; l++) {
+			std::swap(box.landmark.x[l], box.landmark.y[l]);
+		}
+	}
+#endif
+}
+
+
+#if 0
+int FaceDetectionModule::Predict(const PredictRequest& request, PredictResponse& response) {
+}
+#endif
+
+void FaceDetectionModule::PyramidScales(int height, int width, int min_size, float factor,
+                            std::vector<ScaleWindow>* scale_windows) {
+	int min_side = std::min(height, width);
+	double m = 12.0 / min_size;
+	min_side = min_side * m;
+	double cur_scale = 1.0;
+	double scale;
+
+	while (min_side >= 12) {
+		scale = m * cur_scale;
+		cur_scale = cur_scale * factor; 
+		min_side *= factor;
+
+		int hs = std::ceil(height * scale);
+		int ws = std::ceil(width * scale);
+
+    ScaleWindow s;
+    s.height = hs;
+    s.width = ws;
+    s.scale = scale;
+		scale_windows->emplace_back(s);
+	}
+}
+
+void FaceDetectionModule::ProcessBoxes(std::vector<FaceBox>& input, int img_h, int img_w,
+                           std::vector<FaceBox>* res) {
+	Normalize(input, 0.7, NMS_UNION, res); 
+	Regress(res);
+	Square(res);
+	Padding(img_h, img_w, res);
+} 
+
+void FaceDetectionModule::Normalize(std::vector<FaceBox>& input, float threshold, int type,
+                        std::vector<FaceBox>* output) {
+	std::sort(input.begin(), input.end(),
+			[](const FaceBox& a, const FaceBox& b) {
+			  return a.score > b.score;  
+			});
+
+	int box_num = input.size();
+	std::vector<int> merged(box_num, 0);
+  float area0 = 0.0f;
+  float area1 = 0.0f;
+  float score = 0.0f;
+
+	for (int i = 0; i < box_num; i++) { 
+		if (merged[i]) { continue; }
+
+    const FaceBox& c = input[i];
+		output->emplace_back(c);
+		area0 = (c.y1 - c.y0 + 1) * (c.x1 - c.x0 + 1);
+
+		for(int j = i + 1; j < box_num; j++) {
+			if (merged[j]) { continue; }
+
+      const FaceBox& n = input[j];
+
+			float inner_x0 = std::max(c.x0, n.x0);
+			float inner_y0 = std::max(c.y0, n.y0);
+			float inner_x1 = std::min(c.x1, n.x1);
+			float inner_y1 = std::min(c.y1, n.y1);
+			float inner_h = inner_y1 - inner_y0 + 1;
+			float inner_w = inner_x1 - inner_x0 + 1;
+			if (inner_h <= 0 || inner_w <= 0) { continue; }
+
+			float inner_area = inner_h * inner_w;
+			area1 = (n.y1 - n.y0 + 1) * (n.x1 - n.x0 + 1);
+
+			if (type == NMS_UNION) {
+				score = inner_area / (area0 + area1 - inner_area);
+      } else if (type == NMS_MIN) {
+				score = inner_area / std::min(area0, area1);
+			} else {
+				score = 0.0f;
+			}
+
+			if (score > threshold) {
+				merged[j] = 1;
+      }
+		}
+	}
+}
+
+void FaceDetectionModule::Regress(std::vector<FaceBox>* boxes) {
+  float h = 0.0f;
+  float w = 0.0f;
+  for (FaceBox& box : *boxes) {
+		h = box.y1 - box.y0 + 1;
+		w = box.x1 - box.x0 + 1;
+		box.x0 = box.x0 + w * box.regress[0];
+		box.y0 = box.y0 + h * box.regress[1];
+		box.x1 = box.x1 + w * box.regress[2];
+		box.y1 = box.y1 + h * box.regress[3];
+	}    
+}
+
+void FaceDetectionModule::Square(std::vector<FaceBox>* boxes) {
+  float h = 0.0f;
+  float w = 0.0f;
+  float l = 0.0f;
+  for (FaceBox& box : *boxes) {
+		h = box.y1 - box.y0 + 1;
+		w = box.x1 - box.x0 + 1;
+		l = std::max(h, w);
+		box.x0 = box.x0 + (w - l) * 0.5;
+		box.y0 = box.y0 + (h - l) * 0.5;
+		box.x1 = box.x0 + l - 1;
+		box.y1 = box.y0 + l - 1;
+	}
+}
+
+void FaceDetectionModule::Padding(int img_h, int img_w, std::vector<FaceBox>* boxes) {
+  for (FaceBox& box : *boxes) {
+		box.px0 = std::max(box.x0, 1.0f);
+		box.py0 = std::max(box.y0, 1.0f);
+		box.px1 = std::min(box.x1, (float)img_w);
+		box.py1 = std::min(box.y1, (float)img_h);
+	}
+} 
+
+void FaceDetectionModule::Patch(const cv::Mat& img, FaceBox& box, float* data_to,
+                        int height, int width) {
+	cv::Mat resized(height, width, CV_32FC3, data_to);
+	cv::Mat chop_img = img(cv::Range(box.py0, box.py1), cv::Range(box.px0, box.px1));
+	int pad_top    = std::abs(box.py0 - box.y0);
+	int pad_left   = std::abs(box.px0 - box.x0);
+	int pad_bottom = std::abs(box.py1 - box.y1);
+	int pad_right  = std::abs(box.px1 - box.x1);
+	cv::copyMakeBorder(chop_img, chop_img, pad_top, pad_bottom, pad_left,
+                     pad_right, cv::BORDER_CONSTANT, cv::Scalar(0));
+	cv::resize(chop_img, resized, cv::Size(width, height), 0, 0);
+}
+
+void FaceDetectionModule::GenerateBoundingBox(const float* confidence_data,
+    const float* regress_data, float scale, float threshold, int h, int w,
+    bool transposed, std::vector<FaceBox>* output) {
+  const	int kStride = 2;
+  const	int kCellSize = 12;
+
+  float score = 0.0f;
+  float top_x = 0.0f;
+  float top_y = 0.0f;
+  float bottom_x = 0.0f;
+  float bottom_y = 0.0f;
+  int score_offset = 0;
+  int regress_offset = 0;
+
+	for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      score_offset = 2 * w * y + 2 * x + 1;
+			score = confidence_data[score_offset];
+			if (score >= threshold) {
+				top_x = (int)((x * kStride + 1) / scale);
+				top_y = (int)((y * kStride + 1) / scale);
+				bottom_x = (int)((x * kStride + kCellSize) / scale);
+				bottom_y = (int)((y * kStride + kCellSize) / scale);
+
+				FaceBox box;
+				box.x0 = top_x;
+				box.y0 = top_y;
+				box.x1 = bottom_x;
+				box.y1 = bottom_y;
+				box.score = score;
+
+				regress_offset = (w * 4) * y + 4 * x;
+				if (transposed) {
+					box.regress[1] = regress_data[regress_offset];
+					box.regress[0] = regress_data[regress_offset + 1]; 
+					box.regress[3] = regress_data[regress_offset + 2];
+					box.regress[2] = regress_data[regress_offset + 3];
+				} else {
+					box.regress[0] = regress_data[regress_offset];
+					box.regress[1] = regress_data[regress_offset + 1]; 
+					box.regress[2] = regress_data[regress_offset + 2];
+					box.regress[3] = regress_data[regress_offset + 3];
+				}
+				output->emplace_back(box);
+			}
+		}
+  }
+}
+
+}  // namespace prediction

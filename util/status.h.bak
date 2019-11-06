@@ -1,0 +1,77 @@
+// CopyRight 2019 360. All rights reserved.
+// File   status.h
+// Date   2019-10-28 16:56:19
+// Brief
+
+#ifndef PREDICTION_UTIL_STATUS_H_
+#define PREDICTION_UTIL_STATUS_H_
+
+#include <functional>
+#include <iosfwd>
+#include <memory>
+#include <string>
+#include "error_codes.h"
+
+namespace prediction {
+namespace util {
+
+class Status {
+ public:
+  Status() {}
+
+  Status(error::Code code, std::string msg);
+
+  Status(const Status& s);
+  void operator=(const Status& s);
+
+  static Status OK() { return Status(); }
+
+  bool ok() const { return (state_ == NULL); }
+
+  error::Code code() const {
+    return ok() ? error::OK : state_->code;
+  }
+
+  const std::string& error_message() const {
+    return ok() ? empty_string() : state_->msg;
+  }
+
+  bool operator==(const Status& x) const;
+  bool operator!=(const Status& x) const;
+
+  std::string ToString() const;
+
+ private:
+  static const std::string& empty_string();
+  struct State {
+    error::Code code;
+    std::string msg;
+  };
+  // OK status has a `NULL` state_.  Otherwise, `state_` points to
+  // a `State` structure containing the error code and message(s)
+  std::unique_ptr<State> state_;
+
+  void SlowCopyFrom(const State* src);
+};
+
+inline Status::Status(const Status& s)
+    : state_((s.state_ == NULL) ? NULL : new State(*s.state_)) {}
+
+inline void Status::operator=(const Status& s) {
+  if (state_ != s.state_) {
+    SlowCopyFrom(s.state_.get());
+  }
+}
+
+inline bool Status::operator==(const Status& x) const {
+  return (this->state_ == x.state_) || (ToString() == x.ToString());
+}
+
+inline bool Status::operator!=(const Status& x) const { return !(*this == x); }
+
+std::ostream& operator<<(std::ostream& os, const Status& x);
+
+}  // namespace util
+}  // namespace prediction
+
+#endif  // PREDICTION_UTIL_STATUS_H_
