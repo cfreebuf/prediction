@@ -1,0 +1,11 @@
+version/*
+*.o
+*/*.o
+*.swp
+logs/*
+bin/*
+test/unittest
+tags
+data/*
+third_party/*
+libs/*
